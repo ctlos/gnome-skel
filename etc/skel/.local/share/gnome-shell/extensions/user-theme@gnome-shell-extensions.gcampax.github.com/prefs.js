@@ -1,55 +1,40 @@
-// -*- mode: js2; indent-tabs-mode: nil; js2-basic-offset: 4 -*-
-/* exported init buildPrefsWidget */
+// SPDX-FileCopyrightText: 2020 Florian Müllner <fmuellner@gnome.org>
+//
+// SPDX-License-Identifier: GPL-2.0-or-later
 
 // we use async/await here to not block the mainloop, not to parallelize
 /* eslint-disable no-await-in-loop */
 
-const { Gio, GLib, GObject, Gtk } = imports.gi;
+import Adw from 'gi://Adw';
+import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
+import GObject from 'gi://GObject';
+import Gtk from 'gi://Gtk';
 
-const ExtensionUtils = imports.misc.extensionUtils;
+import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
-const Me = ExtensionUtils.getCurrentExtension();
-const Util = Me.imports.util;
+import {getThemeDirs, getModeThemeDirs} from './util.js';
 
-Gio._promisify(Gio._LocalFilePrototype,
-    'enumerate_children_async', 'enumerate_children_finish');
-Gio._promisify(Gio._LocalFilePrototype,
-    'query_info_async', 'query_info_finish');
-Gio._promisify(Gio.FileEnumerator.prototype,
-    'next_files_async', 'next_files_finish');
+Gio._promisify(Gio.File.prototype, 'enumerate_children_async');
+Gio._promisify(Gio.File.prototype, 'query_info_async');
+Gio._promisify(Gio.FileEnumerator.prototype, 'next_files_async');
 
-const UserThemePrefsWidget = GObject.registerClass(
-class UserThemePrefsWidget extends Gtk.ScrolledWindow {
-    _init() {
-        super._init({
-            hscrollbar_policy: Gtk.PolicyType.NEVER,
-        });
+class UserThemePrefsWidget extends Adw.PreferencesGroup {
+    static {
+        GObject.registerClass(this);
+    }
 
-        const box = new Gtk.Box();
-        this.set_child(box);
-
-        this._list = new Gtk.ListBox({
-            selection_mode: Gtk.SelectionMode.NONE,
-            show_separators: true,
-            halign: Gtk.Align.CENTER,
-            valign: Gtk.Align.START,
-            hexpand: true,
-            margin_start: 60,
-            margin_end: 60,
-            margin_top: 60,
-            margin_bottom: 60,
-        });
-        this._list.get_style_context().add_class('frame');
-        box.append(this._list);
+    constructor(settings) {
+        super({title: 'Themes'});
 
         this._actionGroup = new Gio.SimpleActionGroup();
-        this._list.insert_action_group('theme', this._actionGroup);
+        this.insert_action_group('theme', this._actionGroup);
 
-        this._settings = ExtensionUtils.getSettings();
+        this._settings = settings;
         this._actionGroup.add_action(
             this._settings.create_action('name'));
 
-        this.connect('destroy', () => this._settings.run_dispose());
+        this.connect('destroy', () => (this._settings = null));
 
         this._rows = new Map();
         this._addTheme(''); // default
@@ -58,7 +43,7 @@ class UserThemePrefsWidget extends Gtk.ScrolledWindow {
     }
 
     async _collectThemes() {
-        for (const dirName of Util.getThemeDirs()) {
+        for (const dirName of getThemeDirs()) {
             const dir = Gio.File.new_for_path(dirName);
             for (const name of await this._enumerateDir(dir)) {
                 if (this._rows.has(name))
@@ -79,7 +64,7 @@ class UserThemePrefsWidget extends Gtk.ScrolledWindow {
             }
         }
 
-        for (const dirName of Util.getModeThemeDirs()) {
+        for (const dirName of getModeThemeDirs()) {
             const dir = Gio.File.new_for_path(dirName);
             for (const filename of await this._enumerateDir(dir)) {
                 if (!filename.endsWith('.css'))
@@ -93,10 +78,10 @@ class UserThemePrefsWidget extends Gtk.ScrolledWindow {
     }
 
     _addTheme(name) {
-        const row = new ThemeRow(name, this._settings);
+        const row = new ThemeRow(name);
         this._rows.set(name, row);
 
-        this._list.append(row);
+        this.add(row);
     }
 
     async _enumerateDir(dir) {
@@ -123,64 +108,29 @@ class UserThemePrefsWidget extends Gtk.ScrolledWindow {
 
         return fileInfos.map(info => info.get_name());
     }
-});
-
-const ThemeRow = GObject.registerClass(
-class ThemeRow extends Gtk.ListBoxRow {
-    _init(name, settings) {
-        this._name = name;
-        this._settings = settings;
-
-        const box = new Gtk.Box({
-            spacing: 12,
-            margin_start: 12,
-            margin_end: 12,
-            margin_top: 12,
-            margin_bottom: 12,
-        });
-        super._init({
-            action_name: 'theme.name',
-            action_target: new GLib.Variant('s', name),
-            child: box,
-        });
-
-        box.append(new Gtk.Label({
-            label: name || 'Default',
-            hexpand: true,
-            xalign: 0,
-            max_width_chars: 25,
-            width_chars: 25,
-        }));
-
-        this._checkmark = new Gtk.Image({
-            icon_name: 'emblem-ok-symbolic',
-            pixel_size: 16,
-        });
-        box.append(this._checkmark);
-
-        const id = this._settings.connect('changed::name',
-            this._syncCheckmark.bind(this));
-        this._syncCheckmark();
-
-        this.connect('destroy', () => {
-            this._settings.disconnect(id);
-            this._settings = null;
-        });
-    }
-
-    _syncCheckmark() {
-        const visible = this._name === this._settings.get_string('name');
-        this._checkmark.opacity = visible ? 1. : 0;
-    }
-});
-
-/** */
-function init() {
 }
 
-/**
- * @returns {Gtk.Widget} - the prefs widget
- */
-function buildPrefsWidget() {
-    return new UserThemePrefsWidget();
+class ThemeRow extends Adw.ActionRow {
+    static {
+        GObject.registerClass(this);
+    }
+
+    constructor(name) {
+        const check = new Gtk.CheckButton({
+            action_name: 'theme.name',
+            action_target: new GLib.Variant('s', name),
+        });
+
+        super({
+            title: name || 'Default',
+            activatable_widget: check,
+        });
+        this.add_prefix(check);
+    }
+}
+
+export default class UserThemePrefs extends ExtensionPreferences {
+    getPreferencesWidget() {
+        return new UserThemePrefsWidget(this.getSettings());
+    }
 }
